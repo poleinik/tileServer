@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html>
+	<body>
+		 <style type="text/css">
+		 			html { overflow:  hidden; }
+		 			#canvaxy {
+			 				position:absolute;
+			 				top: 50px; /* Расстояние от верхнего края */
+    					left: 0px; /* Расстояние от левого края */
+		 			}
+		 </style>
+
+		 <form method='get' action={{url_for('get_coord')}}>
+		 			<input type="search" name='search' placeholder={{error}} >
+					<input type="submit" value="Найти">
+		</form>
+
+		<button id='app'>+</button>
+		<button id='dis'>-</button>
+		<div id="canvaxy"><canvas id='canva' width=1792 height=768>Обновите браузер</canvas></div>
+
+			<script>
+						var canvas = document.getElementById('canva');
+						var can = canvas.getContext("2d");
+						var lat={{lat}};/* широта */
+						var long={{long}};/* долгота */
+						var level={{level}};/* уровень приближения */
+						loadmap(level,lat,long);
+						function loadmap(){
+							var img1 = new Image();
+							var xhr = new XMLHttpRequest();
+							xhr.responseType="arraybuffer";
+							xhr.open('GET', '/tiles/'+level+'/'+lat+'/'+long, true);
+							xhr.onload=function(){
+											mas=xhr.response;
+											var data= new DataView(mas);
+											var majorblob = new Blob([data],{type:'image/jpeg'});/* массив со всеми тайлами */
+											var url=[];/* массив ссылок на тайлы */
+											/* координаты canvas для отрисовки тайлов */
+											var coord =[0,0,256,0,512,0,768,0,1024,0,1280,0,1536,0,
+																	0,256,256,256,512,256,768,256,1024,256,1280,256,1536,256,
+																	0,512,256,512,512,512,768,512,1024,512,1280,512,1536,512];
+											var start_tile=0;/* начало n-го тайла */
+											var end_tile=0;/* конец n-го тайла */
+											/* Отделение тайлов от главного массива, создание ссылок на них */
+											for (var i = 0; i < data.byteLength-1; i++) {
+														if (data.getUint8(i)===255 && data.getUint8(i+1)===217){
+																		end_tile=i+2;
+																		var imgblob=majorblob.slice(start_tile,end_tile);
+																		url[url.length] = window.URL.createObjectURL(imgblob);
+																		start_tile=end_tile;
+														};
+											};
+											var xmap=0;/* индекс массива coord для координат по оси х */
+											var ymap=1;/* индекс массива coord для координат по оси у */
+
+											for (var i=0;i< url.length;i++){
+												/* отрисовка всех тайлов на canvas */
+															drawTile(url[i],coord[xmap],coord[ymap]);
+															xmap=xmap+2;
+															ymap=ymap+2;
+											};
+
+											function drawTile(path,y,x){
+												/* отрисовка тайла на canvas */
+														var image = new Image();
+														image.src= path;
+														image.onload= function(){
+														can.drawImage(image, y, x);
+														};
+											};
+
+										};
+
+							xhr.send();
+					};
+		var div = document.getElementById('canva'); /* ссылка на canvas */
+		var zin= document.getElementById('app');/* ссылка на кнопку приближения */
+		var zout= document.getElementById('dis');/* ссылка на кнопку отдаления */
+		zin.addEventListener('click',zoomin,false);
+		zout.addEventListener('click',zoomout,false);
+		var levelAr= {11:38.2185,12:19.1093,13:9.5546,14:4.7773,15:2.3887};/* уровень приближения : метры в 1 пикселе*/
+		var res=levelAr[level];
+
+    div.addEventListener('mousedown', init_coord, false);
+		function init_coord(event) {
+			/* координаты экрана при нажатии на мышь */
+			x0=event.clientX;
+			y0=event.clientY-50;
+			div.addEventListener("mousemove", delta, false);
+		}
+		function delta(event){
+		/* Получение координат левого верхнего угла экрана после перемещения*/
+			x1=(x0-event.clientX)/10;/* конечная координата по х*/
+			y1=(event.clientY-50-y0)/10;/* конечная координата по у*/
+			lat=lat+y1*res/1000/(40000/360);/* широта в градусах */
+			long=long+x1*res/((40000/360)*Math.cos(lat*Math.PI/180))*0.001;/* долгота в градусах*/
+			loadmap(level,lat,long);/* загрузка карты для новых координат */
+		}
+
+		div.addEventListener("mouseup",del_move,false);
+		function del_move(event){
+			div.removeEventListener("mousemove",delta, false);
+		}
+		function zoomin(event){
+			/* обработчик нажатия на кнопку приближения*/
+			if(level<15){
+				level++;
+				lat=lat+y1*res/1000/(40000/360);
+				long=long+x1*res/((40000/360)*Math.cos(lat*Math.PI/180))*0.001;
+				loadmap(level,lat,long);
+			}
+		}
+		function zoomout(event){
+			/* обработчик нажатия на кнопку удаления*/
+			if(level>11){
+				level--;
+				lat=lat+y1*res/1000/(40000/360);
+				long=long+x1*res/((40000/360)*Math.cos(lat*Math.PI/180))*0.001;
+				loadmap(level,lat,long);
+			}
+		}
+		</script>
+	</body>
+</html>
