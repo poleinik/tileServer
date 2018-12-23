@@ -1,6 +1,8 @@
 from flask import Flask
-from mongoengine import *
 from flask import render_template,Response,request,redirect,url_for
+from werkzeug.contrib.cache import MemcachedCache
+from mongoengine import *
+from mongoengine.queryset.visitor import Q
 from PIL import Image
 import io
 import h5py
@@ -9,13 +11,16 @@ import json
 import math
 
 app = Flask(__name__)
+
+cache = MemcachedCache(['127.0.0.1:11211'])
+
 connect('coordinates',alias='coord')
 
-from models import Streets
+from models import Streets,Houses
 
 def to_quadkey(level,tilex,tiley):
     '''
-    Преобразование уровня приближения, широты и долготы в идентификатор тайлов quadkey
+    Преобразование уровня приближения, номера тайла на оси х и у в идентификатор тайлов quadkey
     '''
     quadkey=''
     for i in range(level):
@@ -41,19 +46,19 @@ def get_path(quadkey):
     return path,quadkey
 
 @app.route("/spbmap")
-@app.route("/spbmap/<int:level>/<float:lat>/<float:long>")
-def crawler(level=None,lat=None,long=None):
+@app.route("/spbmap/<int:level>/<float:lat>/<float:long>/<name>")
+def render(level=None,lat=None,long=None,name=None):
     '''
     Отрисовка шаблона.
     '''
-    if level is None:
-        #Если функция не получила никаких параметров
+    if level==None:
+        lat=59.939095
+        long=30.315868
         level=11
-        lat=60.063834
-        long=29.706302
-    return render_template('main.html',level=level,lat=lat,long=long)
+        name="Санкт-Петербург"
+    return render_template('main0.html',level=level,lat=lat,long=long,name=name)
 
-@app.route("/tiles/<int:level>/<float:lat>/<float:long>")
+@app.route("/tiles/<int:level>/<int:lat>/<int:long>/")
 def tiles(level,lat,long):
     '''
     1.По координатам и уровню приближения расчитываются координаты первого тайла.
@@ -63,42 +68,61 @@ def tiles(level,lat,long):
     5. Если найден, то преобразуется в байты и отправляется клиенту,
        если нет - создается однотонное изображение, отправляется клиенту.
     '''
-    sinLat=np.sin(lat*np.pi/180)
-    pixelX = ((long + 180) / 360) * 256 * 2**level
-    pixelY = (0.5 - np.log((1 + sinLat) / (1 - sinLat)) / (4 * np.pi)) * 256 * 2**level
-    tileX = int(pixelX / 256)
-    tileY = int(pixelY / 256)
     def stream():
-        with app.app_context():
-            with h5py.File('tile2db.hdf5', 'r') as f:
-                for y in range(0,3):
-                    for x in range(0,7):
-                        path,quadkey=get_path(to_quadkey(level,tileX+x,tileY+y))
+        with h5py.File('tile2db.hdf5', 'r') as f:
+            for y in range(0,3):
+                for x in range(0,7):
+                    path,quadkey=get_path(to_quadkey(level,lat+x,long+y))
+                    rv = cache.get(quadkey)
+                    if rv is None:
                         try:
                             img=f[path].attrs[quadkey].tobytes()
                         except:
-                            newimg=Image.new('RGB',(256,256),(190,170,170))
+                            newimg=Image.new('RGB',(256,256),(170,170,170))
                             img = io.BytesIO()
                             newimg.save(img, 'JPEG', quality=70)
                             img=img.getvalue()
-                        yield img
+                            cache.set(quadkey, img, timeout=5 * 60)
+                    else:
+                        img=rv
+                    yield img
     return Response(stream(),mimetype="image/jpeg")
 
 @app.route("/get_coord")
 def get_coord():
     '''
     Получение координат улицы по ее названию.
-    Нахождение координат для вернего левого угла.
     '''
-    pxm=2.3887
     if request.method=='GET':
-        name=request.args.get('search')
-        street=Streets.objects.get(name=name)
-        latitude=street.latitude+384*pxm*0.001/(40000/360)
-        longtitude=street.longtitude-896*pxm/((40000/360)*math.cos(latitude*math.pi/180))*0.001
-        #except:
-        #    longtitude=0
-        #    latitude=0
-        #    error='По данному запросу ничего не найдено'
+        adress=request.args.get('search')
+        if adress.replace(' ','').isalpha():
+            try:
+                street=Streets.objects.get(name__icontains=adress)
+                latitude=street.latitude
+                longtitude=street.longtitude
+                level=15
+                name=street.name
+            except KeyError:
+                longtitude,latitude,level,name=None,None,None,None
 
-    return redirect(url_for('spbmap',level=15,lat=latitude,long=longtitude))
+        else:
+            adress=adress.split()
+            for slice in adress:
+                if slice.isdigit():
+                    number=int(slice)
+                    adress.pop(adress.index(slice))
+            street=' '.join(adress)
+            try:
+                house=Houses.objects.get(Q(street__icontains=street) & Q(number=number))
+                longtitude=house.longtitude
+                latitude=house.latitude
+                name=house.street+' '+str(house.number)
+                level=15
+            except KeyError:
+                longtitude,latitude,level,name=None,None,None,None
+
+
+    return redirect(url_for('render',level=level,lat=latitude,long=longtitude,name=name))
+
+if __name__ == '__main__':
+    app.run()
