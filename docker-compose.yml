@@ -1,0 +1,13 @@
+version: '1.0'
+
+services:
+	rest:
+		restart: on-failure
+		build:
+			context: .
+		ports:
+		- "127.0.0.1:5000:5000"
+		- "127.0.0.1:5001:5001"
+		volumes:
+		- ~/db:/tiler
+		command: python tile_serv.py
